@@ -25,6 +25,11 @@ spec:
             limits:
               cpu: "500m"
               memory: "256Mi"
+          env:
+            - name: RABBITMQ_URL
+              value: amqp://guest:guest@rabbitmq/
+            - name: REDIS_URL
+              value: redis://redis:6379
           readinessProbe:
             httpGet:
               path: /health

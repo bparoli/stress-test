@@ -1,6 +1,6 @@
-# Kubernetes HPA Demo
+# Kubernetes HPA + KEDA Event-Driven Demo
 
-Demostración de Horizontal Pod Autoscaler (HPA) en Kubernetes usando dos aplicaciones: una API REST con carga CPU intensiva y un servidor nginx.
+Demostración de autoscaling en Kubernetes combinando HPA (Horizontal Pod Autoscaler) y KEDA (Kubernetes Event Driven Autoscaler) sobre una arquitectura event-driven con RabbitMQ y Redis.
 
 El test de carga simula tráfico real mediante dos modelos estadísticos combinados:
 
@@ -8,29 +8,62 @@ El test de carga simula tráfico real mediante dos modelos estadísticos combina
 
 - **Distribución exponencial para el think time** — el tiempo de espera entre requests de un mismo usuario sigue una distribución exponencial (media 0.5s), que es la distribución continua de los intervalos en un proceso de Poisson. Esto evita el patrón artificial de un `sleep` fijo y hace que cada VU se comporte de forma independiente y aleatoria.
 
+---
+
+## Arquitectura
+
+```
+k6 ──POST /primes──▶ math-api ──▶ RabbitMQ (tasks queue)
+                                          │
+                                    worker (x N) ◀── KEDA ScaledObject
+                                          │
+k6 ──GET /primes/{id}──▶ math-api ◀──  Redis
+```
+
+**Flujo de un request:**
+1. k6 envía `POST /primes?limit=N` → math-api publica un mensaje en la cola y devuelve `{task_id, status: "pending"}` con HTTP 202
+2. Un worker consume el mensaje, ejecuta la Criba de Eratóstenes y guarda el resultado en Redis
+3. k6 hace polling a `GET /primes/{task_id}` hasta obtener `{status: "done"}`
+
+---
+
 ## Estructura del proyecto
 
 ```
 .
-├── app.py              # API FastAPI con endpoint /primes (CPU intensivo)
-├── Dockerfile          # Imagen Docker para math-api
-├── requirements.txt    # Dependencias Python
-├── math-api.yaml       # Deployment + Service de math-api
-├── math-api-hpa.yaml   # HPA para math-api (escala por CPU)
-├── nginx-app.yaml      # Deployment + Service de nginx
-├── nginx-hpa.yaml      # HPA para nginx (escala por CPU)
-└── stress.js           # Script de carga k6
+├── app.py                  # API FastAPI: publica en cola y consulta resultados en Redis
+├── worker.py               # Consumer RabbitMQ: calcula primos y guarda en Redis
+├── Dockerfile              # Imagen compartida para math-api y worker
+├── requirements.txt        # Dependencias Python
+├── math-api.yaml           # Deployment + Service de math-api
+├── math-api-hpa.yaml       # HPA para math-api (escala por CPU)
+├── worker.yaml             # Deployment del worker
+├── keda-scaledobject.yaml  # KEDA ScaledObject: escala workers por profundidad de cola
+├── rabbitmq.yaml           # Deployment + Service + ConfigMap de RabbitMQ
+├── redis.yaml              # Deployment + Service de Redis
+├── nginx-app.yaml          # Deployment + Service de nginx (demo adicional)
+├── nginx-hpa.yaml          # HPA para nginx
+├── stress.js               # Script de carga k6 con patrón async request-reply
+├── test.sh                 # Suite de tests funcionales de la API
+└── monitoring/             # Stack de observabilidad local
+    ├── docker-compose.yml      # InfluxDB + Prometheus + Grafana
+    ├── prometheus.yml          # Configuración de scraping
+    ├── kube-state-metrics.yaml # Métricas de deployments/pods para Prometheus
+    ├── start.sh                # Levanta port-forwards + docker compose
+    ├── stop.sh                 # Detiene el stack
+    └── grafana/
+        ├── provisioning/       # Datasources y dashboards pre-configurados
+        └── dashboards/
+            └── autoscale2.json # Dashboard principal
 ```
 
 ---
 
-## Cómo funciona el test
+## Cómo funciona el autoscaling
 
-### La aplicación: math-api
+### math-api — HPA por CPU
 
-`app.py` expone un endpoint `GET /primes?limit=N` que calcula todos los números primos hasta `N` usando la **Criba de Eratóstenes**. Con el valor por defecto (`limit=500000`) cada request consume CPU de forma significativa, lo que permite observar el comportamiento del HPA bajo carga real.
-
-### El HPA de math-api
+`math-api` es el API gateway: recibe requests y publica en la cola. Su carga es proporcional al tráfico entrante, por lo que escala bien por CPU.
 
 Definido en `math-api-hpa.yaml`:
 
@@ -38,19 +71,37 @@ Definido en `math-api-hpa.yaml`:
 |---|---|
 | Réplicas mínimas | 1 |
 | Réplicas máximas | 10 |
-| Umbral de escala | 30% de CPU promedio |
+| Umbral de escala | 70% de CPU promedio |
 | Ventana de scale-down | 10 segundos |
 | Política de scale-down | Máximo 50% de pods cada 15s |
 
-Cuando el CPU promedio entre todos los pods supera el 30% del `request` configurado (250m), el HPA crea nuevos pods. Cuando baja, los reduce gradualmente para evitar cortes si el tráfico rebota.
+### workers — KEDA por profundidad de cola
+
+Los workers procesan los mensajes de la cola. KEDA observa directamente la profundidad de la cola `tasks` en RabbitMQ y escala los workers en consecuencia.
+
+Definido en `keda-scaledobject.yaml`:
+
+| Parámetro | Valor |
+|---|---|
+| Réplicas mínimas | 1 (siempre al menos un worker listo) |
+| Réplicas máximas | 30 |
+| Trigger | RabbitMQ queue length |
+| Umbral | 1 worker adicional por cada 10 mensajes en cola |
+| Polling interval | 5 segundos |
+| Cooldown | 30 segundos antes de escalar al mínimo |
+| Ventana de scale-down | 30 segundos (HPA behavior) |
+| Política de scale-down | Máximo 50% de pods cada 15s |
+
+La ventaja de KEDA sobre HPA por CPU es que reacciona **antes** de que el CPU suba: en cuanto hay mensajes en la cola, ya escala. El mínimo de 1 réplica garantiza que siempre haya un worker listo para tomar el primer mensaje sin cold-start.
 
 ### El script de carga: stress.js
 
-`stress.js` es un test k6 que simula tráfico real usando un **modelo de Poisson**, que es como se comporta el tráfico en sistemas reales: las llegadas son aleatorias e independientes entre sí.
+`stress.js` implementa el patrón **async request-reply**:
+
+1. `POST /primes?limit=N` → obtiene `task_id`
+2. Polling `GET /primes/{task_id}` cada 0.5s hasta recibir `status: done` (máximo 30 intentos)
 
 #### Modelo de llegadas: `ramping-arrival-rate`
-
-En vez de controlar el número de usuarios (VUs), el test controla la **tasa de llegadas por segundo (λ)**. Esto es lo que diferencia un proceso de Poisson de una simulación de carga fija: aunque el servidor tarde más en responder, la tasa de requests se mantiene constante.
 
 ```
   req/s
@@ -66,12 +117,10 @@ En vez de controlar el número de usuarios (VUs), el test controla la **tasa de 
 |---|---|---|---|
 | Ramp up | 30s | 5 → 20 | Arranque gradual |
 | Carga media | 2m | 20 → 100 | Trigger de primeros scale-outs |
-| Carga máxima | 2m | 100 → 200 | Presión máxima sobre los pods |
+| Carga máxima | 2m | 100 → 200 | Presión máxima |
 | Ramp down | 30s | 200 → 0 | Bajada para observar scale-in |
 
 #### Variabilidad realista
-
-Cada request usa un `limit` aleatorio con distribución de pesos, simulando que distintos usuarios generan distinta carga de CPU:
 
 | Límite de primos | Probabilidad | Carga CPU |
 |---|---|---|
@@ -81,12 +130,6 @@ Cada request usa un `limit` aleatorio con distribución de pesos, simulando que 
 | 750,000 | 7% | Alta |
 | 1,000,000 | 3% | Muy alta |
 
-#### Think time exponencial
-
-Entre requests, cada VU espera un tiempo aleatorio con **distribución exponencial** (media 0.5s), evitando el patrón artificial de un sleep fijo. Este tiempo no afecta la tasa de llegadas, que es controlada externamente por `ramping-arrival-rate`.
-
-Cada VU abre una conexión nueva por request (`noConnectionReuse: true`), garantizando que kube-proxy distribuya el tráfico entre todos los pods.
-
 ---
 
 ## Requisitos previos
@@ -94,8 +137,9 @@ Cada VU abre una conexión nueva por request (`noConnectionReuse: true`), garant
 - [minikube](https://minikube.sigs.k8s.io/docs/start/)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [Docker](https://www.docker.com/)
-- [k6](https://k6.io/docs/get-started/installation/)
-- metrics-server habilitado en minikube
+- [k6](https://k6.io/docs/get-started/installation/) (v0.49+ para web dashboard integrado)
+- [KEDA](https://keda.sh/docs/latest/deploy/)
+- Docker Compose (para el stack de monitoreo)
 
 ---
 
@@ -108,41 +152,118 @@ minikube start
 minikube addons enable metrics-server
 ```
 
-### 2. Construir la imagen dentro de minikube
+### 2. Instalar KEDA
 
-> La imagen debe construirse en el contexto Docker de minikube porque `imagePullPolicy: Never` impide que se descargue desde un registry externo.
+```bash
+kubectl apply --server-side -f https://github.com/kedacore/keda/releases/download/v2.16.0/keda-2.16.0.yaml
+```
+
+Verificar que KEDA esté listo:
+
+```bash
+kubectl get pods -n keda
+```
+
+### 3. Construir la imagen dentro de minikube
+
+> La imagen debe construirse en el contexto Docker de minikube porque `imagePullPolicy: Never` impide que se descargue desde un registry externo. La misma imagen se usa para math-api y para el worker (distinto comando de arranque).
 
 ```bash
 eval $(minikube docker-env)
 docker build -t math-api:latest .
 ```
 
-### 3. Desplegar math-api
+### 4. Desplegar la infraestructura
+
+```bash
+kubectl apply -f rabbitmq.yaml
+kubectl apply -f redis.yaml
+```
+
+Esperar a que estén listos:
+
+```bash
+kubectl wait --for=condition=ready pod -l app=rabbitmq --timeout=60s
+kubectl wait --for=condition=ready pod -l app=redis --timeout=30s
+```
+
+### 5. Desplegar math-api y worker
 
 ```bash
 kubectl apply -f math-api.yaml
 kubectl apply -f math-api-hpa.yaml
+kubectl apply -f worker.yaml
+kubectl apply -f keda-scaledobject.yaml
 ```
 
-### 4. (Opcional) Desplegar nginx
+### 6. Desplegar kube-state-metrics (necesario para monitoreo)
+
+```bash
+kubectl apply -f monitoring/kube-state-metrics.yaml
+kubectl wait --for=condition=ready pod -l app=kube-state-metrics -n monitoring --timeout=60s
+```
+
+### 7. (Opcional) Desplegar nginx
 
 ```bash
 kubectl apply -f nginx-app.yaml
 kubectl apply -f nginx-hpa.yaml
 ```
 
-### 5. Verificar que los pods están corriendo
+### 8. Verificar el estado
 
 ```bash
 kubectl get pods
 kubectl get hpa
+kubectl get scaledobject
+```
+
+---
+
+## Monitoreo con Grafana
+
+El stack de monitoreo incluye:
+
+- **InfluxDB** — almacena las métricas de k6 (requests, latencia, VUs)
+- **Prometheus** — scrapea RabbitMQ (puerto 15692) y kube-state-metrics
+- **Grafana** — dashboard pre-configurado con todos los paneles
+
+### Iniciar el stack
+
+```bash
+cd monitoring && ./start.sh
+```
+
+El script levanta los port-forwards necesarios y el stack Docker. Luego abre:
+
+| Servicio | URL |
+|---|---|
+| Grafana | http://localhost:3000 |
+| Prometheus | http://localhost:9090 |
+
+### Dashboard: Autoscale2 – Test Overview
+
+El dashboard incluye los siguientes paneles:
+
+| Panel | Fuente | Métricas |
+|---|---|---|
+| Requests / Failures / Peak RPS / P95 | InfluxDB (k6) | Totales del test |
+| Performance Overview | InfluxDB (k6) | VUs, request rate, response time, failure rate |
+| Queue Depth & Worker Autoscaling | Prometheus | Mensajes listos, unacked y worker pods |
+| RabbitMQ – Salud del broker | Prometheus | Conexiones AMQP y channels |
+| RabbitMQ – Memoria y alarmas | Prometheus | Memoria RSS y alarma de high watermark |
+
+### Detener el stack
+
+```bash
+cd monitoring && ./stop.sh
 ```
 
 ---
 
 ## Ejecutar el test de carga
 
-### 1. Obtener la URL del Service a través de minikube
+### 1. Obtener la URL del Service
 
 > Es importante usar esta URL y no `kubectl port-forward`, ya que port-forward fija el tráfico a un único pod y no permite observar el balanceo real entre réplicas.
 
@@ -153,27 +274,68 @@ minikube service math-api --url
 
 ### 2. Ejecutar k6
 
+Con métricas en Grafana:
+
 ```bash
-k6 run -e BASE_URL=http://192.168.49.2:31234 stress.js
+k6 run -e BASE_URL=http://192.168.49.2:31234 \
+  --out influxdb=http://localhost:8086/k6 \
+  stress.js
 ```
 
-### 3. Observar el comportamiento del HPA en tiempo real
-
-En otra terminal:
+Sin Grafana (dashboard integrado de k6):
 
 ```bash
-# Ver pods y consumo de CPU
+k6 run -e BASE_URL=http://192.168.49.2:31234 \
+  --out web-dashboard \
+  stress.js
+# Abrir http://localhost:5665
+```
+
+### 3. Observar el comportamiento en tiempo real
+
+```bash
+# Pods, CPU y memoria
 watch kubectl top pods
 
-# Ver estado del HPA
+# Estado del HPA (math-api)
 watch kubectl get hpa math-api-hpa
+
+# Estado del ScaledObject (workers)
+watch kubectl get scaledobject worker-scaledobject
+
+# Cola de RabbitMQ
+kubectl exec -it deploy/rabbitmq -- rabbitmqctl list_queues name messages consumers
 ```
 
 ---
 
 ## Comportamiento esperado
 
-1. Al iniciar el test, el pod único comienza a consumir CPU.
-2. Cuando supera el 30% del CPU request, el HPA lanza nuevos pods.
-3. A medida que los pods nuevos pasan a `Ready`, kube-proxy distribuye el tráfico entre todos.
-4. Al terminar el test, el HPA reduce las réplicas gradualmente (máximo 50% cada 15s) hasta volver a 1.
+1. Al iniciar el test, math-api publica mensajes en la cola.
+2. KEDA detecta mensajes en la cola y escala los workers (mínimo 1 siempre activo).
+3. Los workers procesan los mensajes y guardan resultados en Redis.
+4. k6 obtiene los resultados via polling al endpoint `GET /primes/{task_id}`.
+5. Si la cola crece más rápido de lo que los workers procesan, KEDA agrega más workers (hasta 30).
+6. Al terminar el test, la cola se vacía y KEDA escala los workers de vuelta a 1.
+7. math-api también escala down gradualmente por el HPA (máximo 50% de pods cada 15s).
+
+En Grafana se puede observar la correlación directa entre la profundidad de la cola (naranja) y el número de worker pods (azul), que es el comportamiento central que demuestra KEDA.
+
+---
+
+## Notas de implementación
+
+### Resiliencia de conexiones
+
+Tanto `math-api` como `worker` implementan lógica de reconexión ante fallos de RabbitMQ:
+
+- **math-api**: reintentos con backoff en el startup (10 intentos × 3s) mediante `aio_pika.connect_robust`
+- **worker**: loop infinito de reconexión que sobrevive caídas temporales del broker
+
+### RabbitMQ
+
+El plugin `rabbitmq_prometheus` está habilitado via ConfigMap (`enabled_plugins`), exponiendo métricas en el puerto 15692. La readiness probe usa TCP socket en lugar de `rabbitmq-diagnostics ping` para evitar falsos negativos bajo carga.
+
+### Alta cardinalidad en métricas k6
+
+Las URLs de polling (`GET /primes/{task_id}`) usan el tag `name: 'GET /primes/:id'` para agrupar todas las requests bajo una sola serie en InfluxDB, evitando la explosión de cardinalidad que ocurre cuando cada `task_id` único genera una serie diferente.

@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: rabbitmq
+    # Puerto del plugin rabbitmq_prometheus (distinto del 15672 de la UI)
+    static_configs:
+      - targets: ['host.docker.internal:15692']
+
+  - job_name: kube-state-metrics
+    static_configs:
+      - targets: ['host.docker.internal:18080']

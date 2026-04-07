@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rabbitmq-secret
+type: Opaque
+stringData:
+  host: amqp://guest:guest@rabbitmq.default.svc.cluster.local:5672/
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: rabbitmq-trigger-auth
+spec:
+  secretTargetRef:
+    - parameter: host
+      name: rabbitmq-secret
+      key: host
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-scaledobject
+spec:
+  scaleTargetRef:
+    name: worker
+  minReplicaCount: 1   # siempre al menos un worker listo
+  maxReplicaCount: 30
+  pollingInterval: 5   # segundos entre cada lectura de la cola
+  cooldownPeriod: 30   # segundos de inactividad antes de escalar a cero
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 30   # default es 300s (5min) — lo bajamos a 30s
+          policies:
+            - type: Percent
+              value: 50
+              periodSeconds: 15            # baja hasta 50% de los pods cada 15s
+  triggers:
+    - type: rabbitmq
+      metadata:
+        queueName: tasks
+        mode: QueueLength
+        value: "10"       # un worker adicional por cada 5 mensajes en cola
+      authenticationRef:
+        name: rabbitmq-trigger-auth

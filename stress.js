@@ -3,8 +3,7 @@ import { check, sleep } from 'k6';
 
 // Genera un valor con distribución exponencial.
 // En un proceso de Poisson, el tiempo entre llegadas sigue una distribución
-// exponencial con parámetro λ (rate). Esta función se usa para modelar
-// la variabilidad en el costo de cada request.
+// exponencial con parámetro λ (rate).
 function expRandom(rate) {
   return -Math.log(1 - Math.random()) / rate;
 }
@@ -14,10 +13,10 @@ function expRandom(rate) {
 // límites altos (requests costosos en CPU) — distribución realista.
 function randomLimit() {
   const buckets = [
-    { limit: 100_000, weight: 0.40 },
-    { limit: 250_000, weight: 0.30 },
-    { limit: 500_000, weight: 0.20 },
-    { limit: 750_000, weight: 0.07 },
+    { limit: 100_000,   weight: 0.40 },
+    { limit: 250_000,   weight: 0.30 },
+    { limit: 500_000,   weight: 0.20 },
+    { limit: 750_000,   weight: 0.07 },
     { limit: 1_000_000, weight: 0.03 },
   ];
   const r = Math.random();
@@ -36,15 +35,15 @@ export const options = {
     // pero dentro de cada intervalo las llegadas son aleatorias e independientes.
     poisson_traffic: {
       executor: 'ramping-arrival-rate',
-      startRate: 5,         // req/s al inicio
+      startRate: 5,
       timeUnit: '1s',
-      preAllocatedVUs: 100, // VUs pre-creados para no pagar latencia de arranque
-      maxVUs: 500,          // techo de VUs si el sistema es lento y se acumulan
+      preAllocatedVUs: 100,
+      maxVUs: 500,
       stages: [
-        { duration: '30s', target: 20  }, // ramp up:  5 → 20  req/s
-        { duration: '2m',  target: 100 }, // carga media: → 100 req/s
-        { duration: '2m',  target: 200 }, // pico: → 200 req/s
-        { duration: '30s', target: 0   }, // ramp down
+        { duration: '30s', target: 20  },
+        { duration: '2m',  target: 100 },
+        { duration: '2m',  target: 200 },
+        { duration: '2m', target: 0   },
       ],
     },
   },
@@ -56,21 +55,44 @@ const BASE_URL = __ENV.BASE_URL || 'http://127.0.0.1:8080';
 export default function () {
   const limit = randomLimit();
 
-  // El tiempo de proceso de cada request varía aleatoriamente (exponencial),
-  // simulando que distintos usuarios tienen distinta latencia de red/cliente.
-  const thinkTime = expRandom(2); // media = 0.5s
+  // 1. Enviar trabajo a la cola
+  const submitRes = http.post(
+    `${BASE_URL}/primes?limit=${limit}`,
+    null,
+    { tags: { phase: 'submit', limit_bucket: String(limit) } },
+  );
 
-  const res = http.get(`${BASE_URL}/primes?limit=${limit}`, {
-    tags: { limit_bucket: String(limit) },
+  const submitted = check(submitRes, {
+    'submit 202': (r) => r.status === 202,
+    'tiene task_id': (r) => JSON.parse(r.body).task_id !== undefined,
   });
 
-  check(res, {
-    'status 200':   (r) => r.status === 200,
-    'tiene count':  (r) => JSON.parse(r.body).count > 0,
-  });
+  if (!submitted) return;
 
-  // Think time exponencial: pausa variable entre requests del mismo VU,
-  // evitando el patrón artificial de sleep fijo.
-  // No afecta la tasa de llegada (controlada por ramping-arrival-rate).
-  sleep(thinkTime);
+  const taskId = JSON.parse(submitRes.body).task_id;
+
+  // 2. Polling hasta obtener resultado (máximo 30 intentos, cada 0.5s)
+  let done = false;
+  for (let i = 0; i < 30; i++) {
+    sleep(0.5);
+
+    const pollRes = http.get(
+      `${BASE_URL}/primes/${taskId}`,
+      { tags: { phase: 'poll', name: 'GET /primes/:id' } },
+    );
+
+    if (pollRes.status === 200) {
+      const body = JSON.parse(pollRes.body);
+      if (body.status === 'done') {
+        check(pollRes, { 'resultado correcto': () => body.count > 0 });
+        done = true;
+        break;
+      }
+    }
+  }
+
+  check(null, { 'tarea completada': () => done });
+
+  // Think time exponencial: pausa variable entre requests del mismo VU.
+  sleep(expRandom(2));
 }

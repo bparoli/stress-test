@@ -1,0 +1,400 @@
+{
+  "title": "Autoscale2 – Test Overview",
+  "uid": "autoscale2-overview",
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "version": 1,
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Requests Made",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["sum"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "#1F60C4", "mode": "fixed" },
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT count(\"value\") FROM \"http_reqs\" WHERE $timeFilter GROUP BY time($__interval) fill(0)",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "HTTP Failures",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["sum"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "#E02F44", "mode": "fixed" },
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT count(\"value\") FROM \"http_req_failed\" WHERE \"value\" = 1 AND $timeFilter GROUP BY time($__interval) fill(0)",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Peak RPS",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["max"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "#37872D", "mode": "fixed" },
+          "unit": "reqps",
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT non_negative_derivative(count(\"value\"), 1s) FROM \"http_reqs\" WHERE $timeFilter GROUP BY time(1s) fill(0)",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "P95 Response Time",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "#8AB8FF", "mode": "fixed" },
+          "unit": "ms",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT percentile(\"value\", 95) FROM \"http_req_duration\" WHERE $timeFilter GROUP BY time($__interval) fill(none)",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Performance Overview",
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 10 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "VUs" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#8AB8FF", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "left" },
+              { "id": "unit", "value": "short" },
+              { "id": "custom.axisLabel", "value": "VUs" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Request Rate" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#B877D9", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "reqps" },
+              { "id": "custom.axisLabel", "value": "req/s" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "P95 Response Time" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#37872D", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "ms" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Failure Rate" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "percentunit" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT mean(\"value\") AS \"VUs\" FROM \"vus\" WHERE $timeFilter GROUP BY time($__interval) fill(none)",
+          "refId": "A",
+          "resultFormat": "time_series",
+          "alias": "VUs"
+        },
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT non_negative_derivative(count(\"value\"), 1s) AS \"Request Rate\" FROM \"http_reqs\" WHERE $timeFilter GROUP BY time($__interval) fill(0)",
+          "refId": "B",
+          "resultFormat": "time_series",
+          "alias": "Request Rate"
+        },
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT percentile(\"value\", 95) AS \"P95 Response Time\" FROM \"http_req_duration\" WHERE $timeFilter GROUP BY time($__interval) fill(none)",
+          "refId": "C",
+          "resultFormat": "time_series",
+          "alias": "P95 Response Time"
+        },
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT mean(\"value\") AS \"Failure Rate\" FROM \"http_req_failed\" WHERE $timeFilter GROUP BY time($__interval) fill(none)",
+          "refId": "D",
+          "resultFormat": "time_series",
+          "alias": "Failure Rate"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Queue Depth & Worker Autoscaling",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10, "spanNulls": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Mensajes listos" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "left" },
+              { "id": "unit", "value": "short" },
+              { "id": "custom.axisLabel", "value": "Messages" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "En proceso (unacked)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#F2CC0C", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "left" },
+              { "id": "unit", "value": "short" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Worker Pods (ready)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#5794F2", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "short" },
+              { "id": "custom.axisLabel", "value": "Pods" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+          "expr": "rabbitmq_queue_messages_ready",
+          "legendFormat": "Mensajes listos",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+          "expr": "rabbitmq_queue_messages_unacked",
+          "legendFormat": "En proceso (unacked)",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+          "expr": "kube_deployment_status_replicas_ready{deployment=\"worker\"}",
+          "legendFormat": "Worker Pods (ready)",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "RabbitMQ – Salud del broker",
+      "gridPos": { "x": 0, "y": 23, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Conexiones AMQP" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "left" },
+              { "id": "unit", "value": "short" },
+              { "id": "custom.axisLabel", "value": "Conexiones" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Channels" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#8AB8FF", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "left" },
+              { "id": "unit", "value": "short" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+          "expr": "rabbitmq_connections",
+          "legendFormat": "Conexiones AMQP",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+          "expr": "rabbitmq_channels",
+          "legendFormat": "Channels",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "RabbitMQ – Memoria y alarmas",
+      "gridPos": { "x": 12, "y": 23, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Memoria RSS" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } },
+              { "id": "unit", "value": "bytes" },
+              { "id": "custom.axisLabel", "value": "Memoria" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Alarm memoria" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } },
+              { "id": "custom.axisPlacement", "value": "right" },
+              { "id": "unit", "value": "bool_yes_no" },
+              { "id": "custom.axisLabel", "value": "Alarma" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+          "expr": "rabbitmq_process_resident_memory_bytes",
+          "legendFormat": "Memoria RSS",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus-main" },
+          "expr": "rabbitmq_alarms_memory_used_watermark",
+          "legendFormat": "Alarm memoria",
+          "refId": "B"
+        }
+      ]
+    }
+  ]
+}
