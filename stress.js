@@ -1,5 +1,8 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
+import { Trend } from 'k6/metrics';
+
+const queueWait = new Trend('queue_wait_ms', true);
 
 // Genera un valor con distribución exponencial.
 // En un proceso de Poisson, el tiempo entre llegadas sigue una distribución
@@ -38,7 +41,8 @@ export const options = {
       startRate: 5,
       timeUnit: '1s',
       preAllocatedVUs: 100,
-      maxVUs: 500,
+      //maxVUs: 500,
+      maxVUs: 200,
       stages: [
         { duration: '30s', target: 20  },
         { duration: '2m',  target: 100 },
@@ -85,6 +89,9 @@ export default function () {
       const body = JSON.parse(pollRes.body);
       if (body.status === 'done') {
         check(pollRes, { 'resultado correcto': () => body.count > 0 });
+        if (body.queue_wait_s !== undefined) {
+          queueWait.add(body.queue_wait_s * 1000);
+        }
         done = true;
         break;
       }

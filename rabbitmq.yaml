@@ -5,6 +5,8 @@ metadata:
 data:
   enabled_plugins: |
     [rabbitmq_management,rabbitmq_prometheus].
+  rabbitmq.conf: |
+    vm_memory_high_watermark.relative = 0.8
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -36,6 +38,9 @@ spec:
             - name: plugins-config
               mountPath: /etc/rabbitmq/enabled_plugins
               subPath: enabled_plugins
+            - name: plugins-config
+              mountPath: /etc/rabbitmq/rabbitmq.conf
+              subPath: rabbitmq.conf
           resources:
             requests:
               cpu: "500m"

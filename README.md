@@ -241,6 +241,24 @@ El script levanta los port-forwards necesarios y el stack Docker. Luego abre:
 | Grafana | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
 
+### Synthetic probe
+
+El stack incluye un proceso que corre en background y simula un usuario externo cada N segundos, midiendo los tiempos reales de extremo a extremo y escribiéndolos en InfluxDB. Se inicia automáticamente con `start.sh`.
+
+```bash
+# Intervalo por defecto: 1s. Se puede cambiar con la variable de entorno:
+PROBE_INTERVAL=5 ./monitoring/start.sh
+
+# O correrlo independientemente:
+PROBE_INTERVAL=10 BASE_URL=http://192.168.49.2:31234 ./monitoring/synthetic_probe.sh
+```
+
+Salida de consola:
+```
+[probe] 18:42:01 health=12ms submit=45ms queue_wait=320ms total=412ms ok=1
+[probe] 18:42:11 health=8ms  submit=31ms queue_wait=5820ms total=5901ms ok=1
+```
+
 ### Dashboard: Autoscale2 – Test Overview
 
 El dashboard incluye los siguientes paneles:
@@ -249,6 +267,8 @@ El dashboard incluye los siguientes paneles:
 |---|---|---|
 | Requests / Failures / Peak RPS / P95 | InfluxDB (k6) | Totales del test |
 | Performance Overview | InfluxDB (k6) | VUs, request rate, response time, failure rate |
+| Synthetic Probe – Experiencia del usuario externo | InfluxDB (probe) | Health, submit, queue wait y total end-to-end |
+| Queue Wait Time | InfluxDB (k6) | p50 / p95 / p99 del tiempo en cola |
 | Queue Depth & Worker Autoscaling | Prometheus | Mensajes listos, unacked y worker pods |
 | RabbitMQ – Salud del broker | Prometheus | Conexiones AMQP y channels |
 | RabbitMQ – Memoria y alarmas | Prometheus | Memoria RSS y alarma de high watermark |
@@ -334,7 +354,15 @@ Tanto `math-api` como `worker` implementan lógica de reconexión ante fallos de
 
 ### RabbitMQ
 
-El plugin `rabbitmq_prometheus` está habilitado via ConfigMap (`enabled_plugins`), exponiendo métricas en el puerto 15692. La readiness probe usa TCP socket en lugar de `rabbitmq-diagnostics ping` para evitar falsos negativos bajo carga.
+El plugin `rabbitmq_prometheus` está habilitado via ConfigMap junto con `rabbitmq.conf`, que configura `vm_memory_high_watermark.relative = 0.8` (el broker activa la alarma de memoria al 80% del límite del contenedor, en lugar del 40% por defecto). La readiness probe usa TCP socket en lugar de `rabbitmq-diagnostics ping` para evitar falsos negativos bajo carga.
+
+### Concurrencia de publishes en math-api
+
+Un semáforo (`asyncio.Semaphore`) limita a 50 el número de publishes concurrentes hacia RabbitMQ. Esto evita que bajo carga extrema se acumulen coroutines bloqueadas que degraden el event loop e impidan responder rápido a endpoints como `/health`.
+
+### Time-to-done: queue wait vs processing
+
+Cada mensaje incluye el timestamp de publicación (`published_at`). El worker calcula `queue_wait_s` al consumirlo y lo persiste en Redis junto al resultado. `stress.js` lee este campo y lo emite como métrica `queue_wait_ms` hacia InfluxDB, visible en Grafana con percentiles p50/p95/p99.
 
 ### Alta cardinalidad en métricas k6
 

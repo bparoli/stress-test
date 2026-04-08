@@ -299,6 +299,127 @@
       ]
     },
     {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Synthetic Probe – Experiencia del usuario externo",
+      "description": "Tiempos medidos por un usuario externo real: health check, submit y tiempo total hasta recibir el resultado.",
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 9 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Health check" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Submit" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#8AB8FF", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Queue wait" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Total (submit → done)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#B877D9", "mode": "fixed" } },
+              { "id": "custom.lineWidth", "value": 3 }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT mean(\"health_ms\") AS \"Health check\" FROM \"synthetic_probe\" WHERE $timeFilter GROUP BY time($__interval) fill(none)",
+          "refId": "A",
+          "resultFormat": "time_series"
+        },
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT mean(\"submit_ms\") AS \"Submit\" FROM \"synthetic_probe\" WHERE $timeFilter GROUP BY time($__interval) fill(none)",
+          "refId": "B",
+          "resultFormat": "time_series"
+        },
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT mean(\"queue_wait_ms\") AS \"Queue wait\" FROM \"synthetic_probe\" WHERE $timeFilter GROUP BY time($__interval) fill(none)",
+          "refId": "C",
+          "resultFormat": "time_series"
+        },
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT mean(\"total_ms\") AS \"Total (submit → done)\" FROM \"synthetic_probe\" WHERE $timeFilter GROUP BY time($__interval) fill(none)",
+          "refId": "D",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Queue Wait Time (tiempo en cola antes de ser procesado)",
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "lineWidth": 2, "fillOpacity": 5, "spanNulls": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "p50" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#73BF69", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p95" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#FF9830", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "p99" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#E02F44", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "influxdb", "uid": "influxdb-k6" },
+          "rawQuery": true,
+          "query": "SELECT percentile(\"value\", 50) AS \"p50\", percentile(\"value\", 95) AS \"p95\", percentile(\"value\", 99) AS \"p99\" FROM \"queue_wait_ms\" WHERE $timeFilter GROUP BY time($__interval) fill(none)",
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
       "id": 7,
       "type": "timeseries",
       "title": "RabbitMQ – Salud del broker",

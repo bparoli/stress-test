@@ -24,8 +24,8 @@ spec:
   scaleTargetRef:
     name: worker
   minReplicaCount: 1   # siempre al menos un worker listo
-  maxReplicaCount: 30
-  pollingInterval: 5   # segundos entre cada lectura de la cola
+  maxReplicaCount: 40
+  pollingInterval: 2   # segundos entre cada lectura de la cola
   cooldownPeriod: 30   # segundos de inactividad antes de escalar a cero
   advanced:
     horizontalPodAutoscalerConfig:
@@ -41,6 +41,6 @@ spec:
       metadata:
         queueName: tasks
         mode: QueueLength
-        value: "10"       # un worker adicional por cada 5 mensajes en cola
+        value: "5"       # un worker adicional por cada 5 mensajes en cola
       authenticationRef:
         name: rabbitmq-trigger-auth

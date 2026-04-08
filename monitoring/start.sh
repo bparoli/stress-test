@@ -6,7 +6,7 @@ PF_PIDS=()
 
 cleanup() {
   echo ""
-  echo "Deteniendo port-forwards..."
+  echo "Deteniendo port-forwards y probe..."
   for pid in "${PF_PIDS[@]}"; do
     kill "$pid" 2>/dev/null || true
   done
@@ -44,7 +44,14 @@ echo ""
 echo "Para correr el test:"
 echo "  k6 run --out influxdb=http://localhost:8086/k6 ../stress.js"
 echo ""
-echo "Ctrl+C para detener los port-forwards."
+echo "Ctrl+C para detener los port-forwards y el probe."
+echo ""
+
+# ── Synthetic probe ───────────────────────────────────────────────────────────
+sleep 3   # esperar a que InfluxDB esté listo
+PROBE_INTERVAL="${PROBE_INTERVAL:-1}" "$SCRIPT_DIR/synthetic_probe.sh" &
+PF_PIDS+=($!)
+echo "Synthetic probe activo (cada ${PROBE_INTERVAL:-1}s) → logs en /tmp/synthetic_probe.log"
 echo ""
 
 # Mantener vivo para que el trap funcione

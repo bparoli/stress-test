@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 import uuid
 
 import aio_pika
@@ -10,18 +11,21 @@ from fastapi.responses import JSONResponse
 
 app = FastAPI(title="Math API")
 
-RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/")
-REDIS_URL    = os.getenv("REDIS_URL",    "redis://redis:6379")
+RABBITMQ_URL      = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq/")
+REDIS_URL         = os.getenv("REDIS_URL",    "redis://redis:6379")
+MAX_CONCURRENT_PUBLISHES = int(os.getenv("MAX_CONCURRENT_PUBLISHES", "50"))
 
 _redis:   redis.Redis        = None
 _rmq_conn: aio_pika.RobustConnection = None
 _channel:  aio_pika.Channel  = None
+_publish_semaphore: asyncio.Semaphore | None = None
 
 
 @app.on_event("startup")
 async def startup():
-    global _redis, _rmq_conn, _channel
-    _redis = redis.from_url(REDIS_URL, decode_responses=True)
+    global _redis, _rmq_conn, _channel, _publish_semaphore
+    _redis             = redis.from_url(REDIS_URL, decode_responses=True)
+    _publish_semaphore = asyncio.Semaphore(MAX_CONCURRENT_PUBLISHES)
 
     for attempt in range(10):
         try:
@@ -55,13 +59,17 @@ async def submit_primes(limit: int = Query(default=500_000, ge=2, le=5_000_000))
     """
     task_id = str(uuid.uuid4())
 
-    await _channel.default_exchange.publish(
-        aio_pika.Message(
-            body=json.dumps({"task_id": task_id, "limit": limit}).encode(),
-            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-        ),
-        routing_key="tasks",
-    )
+    async with _publish_semaphore:
+        await asyncio.wait_for(
+            _channel.default_exchange.publish(
+                aio_pika.Message(
+                    body=json.dumps({"task_id": task_id, "limit": limit, "published_at": time.time()}).encode(),
+                    delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                ),
+                routing_key="tasks",
+            ),
+            timeout=2.0,
+        )
 
     await _redis.set(f"task:{task_id}", json.dumps({"status": "pending"}))
 
